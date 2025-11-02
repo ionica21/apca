@@ -138,6 +138,21 @@ impl Source for SIP {
 
 impl private::Sealed for SIP {}
 
+/// Use OPRA as the data source for options.
+///
+/// This source is only usable with the unlimited market data plan.
+#[derive(Clone, Copy, Debug)]
+pub enum OPRA {}
+
+impl Source for OPRA {
+  #[inline]
+  fn source() -> SourceVariant {
+    SourceVariant::Url("wss://stream.data.alpaca.markets/v1beta1/opra".into())
+  }
+}
+
+impl private::Sealed for OPRA {}
+
 
 /// A realtime data source that uses a custom URL.
 ///
