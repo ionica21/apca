@@ -19,6 +19,8 @@ pub mod calendar;
 pub mod clock;
 /// Definitions surrounding options.
 pub mod option;
+/// Functionality for listing available options contracts.
+pub mod options;
 /// Definitions surrounding orders.
 pub mod order;
 /// Functionality for listing orders.
