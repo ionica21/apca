@@ -31,11 +31,11 @@ pub struct ListReq {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ListReqInit<S> {
   /// See `ListReq::underlying_symbols`.
-  underlying_symbols: Option<Vec<S>>,
+  pub underlying_symbols: Option<Vec<S>>,
   /// See `ListReq::limit`.
-  limit: Option<usize>,
+  pub limit: Option<usize>,
   /// See `ListReq::status`.
-  status: Status,
+  pub status: Status,
 }
 
 impl<S> ListReqInit<S>
