@@ -25,16 +25,14 @@ use futures::StreamExt as _;
 
 use num_decimal::Num;
 
+use rmp_serde::decode::Error as MsgPackDecodeError;
+
 use serde::de::DeserializeOwned;
 use serde::de::Deserializer;
 use serde::ser::SerializeSeq as _;
 use serde::ser::Serializer;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::from_slice as json_from_slice;
-use serde_json::from_str as json_from_str;
-use serde_json::to_string as to_json;
-use serde_json::Error as JsonError;
 
 use thiserror::Error as ThisError;
 
@@ -412,10 +410,10 @@ pub enum ControlMessage {
 
 /// A websocket message that we tried to parse.
 type ParsedMessage<B, Q, T> =
-  MessageResult<Result<DataMessage<B, Q, T>, JsonError>, WebSocketError>;
+  MessageResult<Result<DataMessage<B, Q, T>, MsgPackDecodeError>, WebSocketError>;
 
 impl<B, Q, T> subscribe::Message for ParsedMessage<B, Q, T> {
-  type UserMessage = Result<Result<Data<B, Q, T>, JsonError>, WebSocketError>;
+  type UserMessage = Result<Result<Data<B, Q, T>, MsgPackDecodeError>, WebSocketError>;
   type ControlMessage = ControlMessage;
 
   fn classify(self) -> subscribe::Classification<Self::UserMessage, Self::ControlMessage> {
@@ -689,11 +687,11 @@ where
       key_id: key_id.into(),
       secret: secret.into(),
     };
-    let json = match to_json(&request) {
-      Ok(json) => json,
-      Err(err) => return Ok(Err(Error::Json(err))),
+    let bytes = match rmp_serde::to_vec_named(&request) {
+      Ok(bytes) => bytes,
+      Err(err) => return Ok(Err(Error::MsgPackEncode(err))),
     };
-    let message = wrap::Message::Text(json);
+    let message = wrap::Message::Binary(bytes);
     let response = self.subscription.send(message).await?;
 
     match response {
@@ -722,11 +720,11 @@ where
     &mut self,
     request: &Request<'_>,
   ) -> Result<Result<(), Error>, S::Error> {
-    let json = match to_json(request) {
-      Ok(json) => json,
-      Err(err) => return Ok(Err(Error::Json(err))),
+    let bytes = match rmp_serde::to_vec_named(request) {
+      Ok(bytes) => bytes,
+      Err(err) => return Ok(Err(Error::MsgPackEncode(err))),
     };
-    let message = wrap::Message::Text(json);
+    let message = wrap::Message::Binary(bytes);
     let response = self.subscription.send(message).await?;
 
     match response {
@@ -783,14 +781,14 @@ where
 
 type ParseFn<B, Q, T> = fn(
   Result<wrap::Message, WebSocketError>,
-) -> Result<Result<Vec<DataMessage<B, Q, T>>, JsonError>, WebSocketError>;
+) -> Result<Result<Vec<DataMessage<B, Q, T>>, MsgPackDecodeError>, WebSocketError>;
 type MapFn<B, Q, T> =
-  fn(Result<Result<DataMessage<B, Q, T>, JsonError>, WebSocketError>) -> ParsedMessage<B, Q, T>;
+  fn(Result<Result<DataMessage<B, Q, T>, MsgPackDecodeError>, WebSocketError>) -> ParsedMessage<B, Q, T>;
 type Stream<B, Q, T> = Map<
   Unfold<
     Map<Wrapper<WebSocketStream<MaybeTlsStream<TcpStream>>>, ParseFn<B, Q, T>>,
     DataMessage<B, Q, T>,
-    JsonError,
+    MsgPackDecodeError,
   >,
   MapFn<B, Q, T>,
 >;
@@ -824,15 +822,15 @@ where
   async fn connect(api_info: &Self::Input) -> Result<(Self::Stream, Self::Subscription), Error> {
     fn parse<B, Q, T>(
       result: Result<wrap::Message, WebSocketError>,
-    ) -> Result<Result<Vec<DataMessage<B, Q, T>>, JsonError>, WebSocketError>
+    ) -> Result<Result<Vec<DataMessage<B, Q, T>>, MsgPackDecodeError>, WebSocketError>
     where
       B: DeserializeOwned,
       Q: DeserializeOwned,
       T: DeserializeOwned,
     {
       result.map(|message| match message {
-        wrap::Message::Text(string) => json_from_str::<Vec<DataMessage<B, Q, T>>>(&string),
-        wrap::Message::Binary(data) => json_from_slice::<Vec<DataMessage<B, Q, T>>>(&data),
+        wrap::Message::Text(_) => Ok(vec![]),
+        wrap::Message::Binary(data) => rmp_serde::from_slice::<Vec<DataMessage<B, Q, T>>>(&data),
       })
     }
 
@@ -866,7 +864,7 @@ where
     let connect = subscription.subscription.read().boxed();
     let message = drive(connect, &mut stream).await.map_err(|result| {
       result
-        .map(|result| Error::Json(result.unwrap_err()))
+        .map(|result| Error::MsgPackDecode(result.unwrap_err()))
         .map_err(Error::WebSocket)
         .unwrap_or_else(|err| err)
     })?;
@@ -889,7 +887,7 @@ where
     let authenticate = subscription.authenticate(key_id, secret).boxed();
     let () = drive(authenticate, &mut stream).await.map_err(|result| {
       result
-        .map(|result| Error::Json(result.unwrap_err()))
+        .map(|result| Error::MsgPackDecode(result.unwrap_err()))
         .map_err(Error::WebSocket)
         .unwrap_or_else(|err| err)
     })???;
@@ -915,12 +913,11 @@ mod tests {
   use serial_test::serial;
 
   use serde_json::from_str as json_from_str;
+  use serde_json::to_string as to_json;
 
   use test_log::test;
 
   use tokio::time::timeout;
-
-  use tungstenite::tungstenite::Utf8Bytes;
 
   use websocket_util::test::WebSocketStream;
   use websocket_util::tungstenite::Message;
@@ -979,8 +976,10 @@ mod tests {
   "v": 49378,
   "t": "2021-02-22T19:15:00Z"
 }"#;
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
 
-    let message = json_from_str::<DataMessage>(json).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage>(&bytes).unwrap();
     let bar = match &message {
       DataMessage::Bar(bar) => bar,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1021,8 +1020,10 @@ mod tests {
   "z": "C",
   "t": "2022-01-18T23:09:42.151875584Z"
 }"#;
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
 
-    let message = json_from_str::<DataMessage>(json).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage>(&bytes).unwrap();
     let quote = match &message {
       DataMessage::Quote(quote) => quote,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1103,8 +1104,10 @@ mod tests {
   "z": "C",
   "t": "2022-01-18T23:09:42.151875584Z"
 }"#;
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
 
-    let message = json_from_str::<DataMessage<Bar, DetailedQuote, Trade>>(json).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage<Bar, DetailedQuote, Trade>>(&bytes).unwrap();
     let quote = match &message {
       DataMessage::Quote(quote) => quote,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1144,8 +1147,10 @@ mod tests {
   "c": ["@", "I"],
   "z": "C"
 }"#;
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
 
-    let message = json_from_str::<DataMessage>(json).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage>(&bytes).unwrap();
     let trade = match &message {
       DataMessage::Trade(trade) => trade,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1216,8 +1221,10 @@ mod tests {
   "z": "C",
   "u": "corrected"
 }"#;
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
 
-    let message = json_from_str::<DataMessage<Bar, Quote, DetailedTrade>>(json).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage<Bar, Quote, DetailedTrade>>(&bytes).unwrap();
     let trade = match &message {
       DataMessage::Trade(trade) => trade,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1247,7 +1254,9 @@ mod tests {
   #[test]
   fn serialize_deserialize_success() {
     let json = r#"{"T":"success","msg":"authenticated"}"#;
-    let message = json_from_str::<DataMessage>(json).unwrap();
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage>(&bytes).unwrap();
     let () = match message {
       DataMessage::Success => (),
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1264,7 +1273,9 @@ mod tests {
   #[test]
   fn serialize_deserialize_error() {
     let json = r#"{"T":"error","code":400,"msg":"invalid syntax"}"#;
-    let message = json_from_str::<DataMessage>(json).unwrap();
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage>(&bytes).unwrap();
     let error = match &message {
       DataMessage::Error(error) => error,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1279,7 +1290,9 @@ mod tests {
     );
 
     let json = r#"{"T":"error","code":500,"msg":"internal error"}"#;
-    let message = json_from_str::<DataMessage>(json).unwrap();
+    let v = serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let bytes = rmp_serde::to_vec_named(&v).unwrap();
+    let message = rmp_serde::from_slice::<DataMessage>(&bytes).unwrap();
     let error = match &message {
       DataMessage::Error(error) => error,
       _ => panic!("Decoded unexpected message variant: {message:?}"),
@@ -1295,52 +1308,72 @@ mod tests {
   }
 
   /// Check that we can serialize and deserialize the
-  /// [`Request::Authenticate`] variant properly.
+  /// [`Request::Authenticate`] variant via MessagePack.
   #[test]
-  fn serialize_deserialize_authentication_request() {
+  fn serialize_deserialize_authentication_request_msgpack() {
     let request = Request::Authenticate {
       key_id: "KEY-ID".into(),
       secret: "SECRET-KEY".into(),
     };
-    let json = to_json(&request).unwrap();
-    let expected = r#"{"action":"auth","key":"KEY-ID","secret":"SECRET-KEY"}"#;
-    assert_eq!(json, expected);
-    assert_eq!(json_from_str::<Request<'_>>(&json).unwrap(), request);
+
+    let mp = rmp_serde::to_vec_named(&request).unwrap();
+
+    let expected_json = r#"{"action":"auth","key":"KEY-ID","secret":"SECRET-KEY"}"#;
+    let expected_val: serde_json::Value = serde_json::from_str(expected_json).unwrap();
+    let got_val: serde_json::Value = rmp_serde::from_slice(&mp).unwrap();
+    assert_eq!(got_val, expected_val);
+
+    let decoded: Request<'_> = rmp_serde::from_slice(&mp).unwrap();
+    assert_eq!(decoded, request);
   }
 
   /// Check that we can serialize and deserialize the
-  /// [`Request::Subscribe`] variant properly.
+  /// [`Request::Subscribe`] variant via MessagePack.
   #[test]
-  fn serialize_deserialize_subscribe_request() {
+  fn serialize_deserialize_subscribe_request_msgpack() {
     let mut data = MarketData::default();
     data.set_bars(["AAPL", "VOO"]);
     let request = Request::Subscribe(Cow::Borrowed(&data));
 
-    let json = to_json(&request).unwrap();
-    let expected = r#"{"action":"subscribe","bars":["AAPL","VOO"],"quotes":[],"trades":[]}"#;
-    assert_eq!(json, expected);
-    assert_eq!(json_from_str::<Request<'_>>(&json).unwrap(), request);
+    let mp = rmp_serde::to_vec_named(&request).unwrap();
+
+    let expected_json = r#"{"action":"subscribe","bars":["AAPL","VOO"],"quotes":[],"trades":[]}"#;
+    let expected_val: serde_json::Value = serde_json::from_str(expected_json).unwrap();
+    let got_val: serde_json::Value = rmp_serde::from_slice(&mp).unwrap();
+    assert_eq!(got_val, expected_val);
+
+    let decoded: Request<'_> = rmp_serde::from_slice(&mp).unwrap();
+    assert_eq!(decoded, request);
   }
 
   /// Check that we can serialize and deserialize the
-  /// [`Request::Subscribe`] variant properly.
+  /// [`Request::Unsubscribe`] variant via MessagePack.
   #[test]
-  fn serialize_deserialize_unsubscribe_request() {
+  fn serialize_deserialize_unsubscribe_request_msgpack() {
     let mut data = MarketData::default();
     data.set_bars(["VOO"]);
     let request = Request::Unsubscribe(Cow::Borrowed(&data));
 
-    let json = to_json(&request).unwrap();
-    let expected = r#"{"action":"unsubscribe","bars":["VOO"],"quotes":[],"trades":[]}"#;
-    assert_eq!(json, expected);
-    assert_eq!(json_from_str::<Request<'_>>(&json).unwrap(), request);
+    let mp = rmp_serde::to_vec_named(&request).unwrap();
+
+    let expected_json = r#"{"action":"unsubscribe","bars":["VOO"],"quotes":[],"trades":[]}"#;
+    let expected_val: serde_json::Value = serde_json::from_str(expected_json).unwrap();
+    let got_val: serde_json::Value = rmp_serde::from_slice(&mp).unwrap();
+    assert_eq!(got_val, expected_val);
+
+    let decoded: Request<'_> = rmp_serde::from_slice(&mp).unwrap();
+    assert_eq!(decoded, request);
   }
 
-  /// Check that we can correctly deserialize a `SymbolList` object.
+  /// Check that we can correctly deserialize a `SymbolList` object via MessagePack.
   #[test]
-  fn deserialize_symbol_list() {
+  fn deserialize_symbol_list_msgpack() {
+    // Keep the original JSON for readability, turn it into msgpack bytes.
     let json = r#"["AAPL","XLK","SPY"]"#;
-    let list = json_from_str::<SymbolList>(json).unwrap();
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    let mp = rmp_serde::to_vec_named(&v).unwrap();
+
+    let list: SymbolList = rmp_serde::from_slice(&mp).unwrap();
     let expected = SymbolList::from(["AAPL", "SPY", "XLK"]);
     assert_eq!(list, expected);
   }
@@ -1376,24 +1409,24 @@ mod tests {
   async fn authenticate_and_subscribe() {
     async fn test(mut stream: WebSocketStream) -> Result<(), WebSocketError> {
       stream
-        .send(Message::Text(Utf8Bytes::from_static(CONN_RESP)))
+        .send(Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(CONN_RESP).unwrap()).unwrap().into()))
         .await?;
       // Authentication.
       assert_eq!(
         stream.next().await.unwrap()?,
-        Message::Text(Utf8Bytes::from_static(AUTH_REQ)),
+        Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(AUTH_REQ).unwrap()).unwrap().into()),
       );
       stream
-        .send(Message::Text(Utf8Bytes::from_static(AUTH_RESP)))
+        .send(Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(AUTH_RESP).unwrap()).unwrap().into()))
         .await?;
 
       // Subscription.
       assert_eq!(
         stream.next().await.unwrap()?,
-        Message::Text(Utf8Bytes::from_static(SUB_REQ)),
+        Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(SUB_REQ).unwrap()).unwrap().into()),
       );
       stream
-        .send(Message::Text(Utf8Bytes::from_static(SUB_RESP)))
+        .send(Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(SUB_RESP).unwrap()).unwrap().into()))
         .await?;
       stream.send(Message::Close(None)).await?;
       Ok(())
@@ -1414,7 +1447,7 @@ mod tests {
 
     stream
       .map_err(Error::WebSocket)
-      .try_for_each(|result| async { result.map(|_data| ()).map_err(Error::Json) })
+      .try_for_each(|result| async { result.map(|_data| ()).map_err(Error::MsgPackDecode) })
       .await
       .unwrap();
   }
@@ -1425,24 +1458,24 @@ mod tests {
   async fn subscribe_error() {
     async fn test(mut stream: WebSocketStream) -> Result<(), WebSocketError> {
       stream
-        .send(Message::Text(Utf8Bytes::from_static(CONN_RESP)))
+        .send(Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(CONN_RESP).unwrap()).unwrap().into()))
         .await?;
       // Authentication.
       assert_eq!(
         stream.next().await.unwrap()?,
-        Message::Text(Utf8Bytes::from_static(AUTH_REQ)),
+        Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(AUTH_REQ).unwrap()).unwrap().into()),
       );
       stream
-        .send(Message::Text(Utf8Bytes::from_static(AUTH_RESP)))
+        .send(Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(AUTH_RESP).unwrap()).unwrap().into()))
         .await?;
 
       // Subscription.
       assert_eq!(
         stream.next().await.unwrap()?,
-        Message::Text(Utf8Bytes::from_static(SUB_ERR_REQ)),
+        Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(SUB_ERR_REQ).unwrap()).unwrap().into()),
       );
       stream
-        .send(Message::Text(Utf8Bytes::from_static(SUB_ERR_RESP)))
+        .send(Message::Binary(rmp_serde::to_vec_named(&serde_json::from_str::<serde_json::Value>(SUB_ERR_RESP).unwrap()).unwrap().into()))
         .await?;
       stream.send(Message::Close(None)).await?;
       Ok(())
@@ -1534,7 +1567,7 @@ mod tests {
           .map(|data| {
             assert!(data.is_bar());
           })
-          .map_err(Error::Json)
+          .map_err(Error::MsgPackDecode)
       });
 
     if timeout(Duration::from_millis(100), read).await.is_ok() {
@@ -1575,7 +1608,7 @@ mod tests {
             .map(|data| {
               assert!(data.is_quote());
             })
-            .map_err(Error::Json)
+            .map_err(Error::MsgPackDecode)
         });
 
       if timeout(Duration::from_millis(100), read).await.is_ok() {
@@ -1622,7 +1655,7 @@ mod tests {
           .map(|data| {
             assert!(data.is_trade());
           })
-          .map_err(Error::Json)
+          .map_err(Error::MsgPackDecode)
       });
 
     if timeout(Duration::from_millis(100), read).await.is_ok() {

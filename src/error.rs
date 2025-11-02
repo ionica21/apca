@@ -11,13 +11,14 @@ use std::str::from_utf8;
 use http::Error as HttpError;
 use http::StatusCode as HttpStatusCode;
 use hyper::Error as HyperError;
+use rmp_serde::encode::Error as MsgPackEncodeError;
+use rmp_serde::decode::Error as MsgPackDecodeError;
 use serde_json::Error as JsonError;
 use thiserror::Error;
 use url::ParseError;
 use websocket_util::tungstenite::Error as WebSocketError;
 
 use crate::Str;
-
 
 /// An error encountered while issuing a request.
 #[derive(Debug, Error)]
@@ -62,7 +63,6 @@ impl Display for HttpBody {
   }
 }
 
-
 /// The error type as used by this crate.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -101,13 +101,25 @@ pub enum Error {
     #[source]
     WebSocketError,
   ),
+  /// A MessagePack encode error.
+  #[error("encoding msgpack failed")]
+  MsgPackEncode(
+    #[from]
+    #[source]
+    MsgPackEncodeError,
+  ),
+  /// A MessagePack decode error.
+  #[error("decoding msgpack failed")]
+  MsgPackDecode(
+    #[from]
+    #[source]
+    MsgPackDecodeError,
+  )
 }
-
 
 #[cfg(test)]
 mod tests {
   use super::*;
-
 
   /// Check that we can serialize a [`Side`] object.
   #[test]

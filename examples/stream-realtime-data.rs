@@ -101,7 +101,7 @@ async fn main() {
     // Stop after receiving and printing 50 updates.
     .take(50)
     .map_err(Error::WebSocket)
-    .try_for_each(|result| async { result.map(|data| println!("{data:?}")).map_err(Error::Json) })
+    .try_for_each(|result| async { result.map(|data| println!("{data:?}")).map_err(Error::MsgPackDecode) })
     .await
     .unwrap();
 

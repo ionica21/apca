@@ -1,6 +1,7 @@
 // Copyright (C) 2019-2023 The apca Developers
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use http::header::CONTENT_TYPE;
 use url::Url;
 
 use tokio::net::TcpStream;
@@ -13,6 +14,7 @@ use tracing_futures::Instrument;
 
 use tungstenite::connect_async;
 use tungstenite::MaybeTlsStream;
+use tungstenite::tungstenite::client::IntoClientRequest;
 use tungstenite::WebSocketStream;
 
 use websocket_util::wrap::Wrapper;
@@ -49,10 +51,13 @@ async fn connect_internal(url: &Url) -> Result<WebSocketStream<MaybeTlsStream<Tc
   async move {
     debug!(message = "connecting", url = display(url));
 
+    let mut req = url.into_client_request()?;
+    let _ = req.headers_mut().insert(CONTENT_TYPE, "application/msgpack".parse().unwrap());
+
     // We just ignore the response & headers that are sent along after
     // the connection is made. Alpaca does not seem to be using them,
     // really.
-    let (stream, response) = connect_async(url).await?;
+    let (stream, response) = connect_async(req).await?;
     debug!("connection successful");
     trace!(response = debug(&response));
 
