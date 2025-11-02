@@ -17,6 +17,8 @@ pub mod calendar;
 /// Functionality for retrieving market open/close timing information
 /// for the current trading day.
 pub mod clock;
+/// Definitions surrounding options.
+pub mod option;
 /// Definitions surrounding orders.
 pub mod order;
 /// Functionality for listing orders.
