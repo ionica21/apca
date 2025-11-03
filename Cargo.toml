@@ -51,6 +51,7 @@ url = "2.0"
 uuid = {version = "1.0", default-features = false, features = ["serde"]}
 websocket-util = "0.14"
 rmp-serde = "1.3.0"
+rmpv = { version = "1.3.0", features = ["with-serde"] }
 
 [dev-dependencies]
 serial_test = {version = "3.0.0", default-features = false}

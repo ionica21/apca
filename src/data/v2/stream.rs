@@ -51,6 +51,7 @@ use websocket_util::wrap::Wrapper;
 
 use super::unfold::Unfold;
 
+use crate::data::v2::de::dt_any;
 use crate::subscribable::Subscribable;
 use crate::websocket::connect;
 use crate::websocket::MessageResult;
@@ -284,7 +285,7 @@ pub struct Bar {
   #[serde(rename = "v")]
   pub volume: Num,
   /// The bar's time stamp.
-  #[serde(rename = "t")]
+  #[serde(rename = "t", deserialize_with = "dt_any")]
   pub timestamp: DateTime<Utc>,
 }
 
@@ -308,7 +309,7 @@ pub struct Quote {
   #[serde(rename = "as")]
   pub ask_size: Num,
   /// The quote's time stamp.
-  #[serde(rename = "t")]
+  #[serde(rename = "t", deserialize_with = "dt_any")]
   pub timestamp: DateTime<Utc>,
 }
 
@@ -329,8 +330,31 @@ pub struct Trade {
   #[serde(rename = "s")]
   pub trade_size: Num,
   /// The trade's time stamp.
-  #[serde(rename = "t")]
+  #[serde(rename = "t", deserialize_with = "dt_any")]
   pub timestamp: DateTime<Utc>,
+}
+
+/// A trade for an options contract.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OptionsTrade {
+  /// The trade's symbol.
+  #[serde(rename = "S")]
+  pub symbol: String,
+  /// The trade's price.
+  #[serde(rename = "p")]
+  pub trade_price: Num,
+  /// The trade's size.
+  #[serde(rename = "s")]
+  pub trade_size: Num,
+  /// The trade's time stamp.
+  #[serde(rename = "t", deserialize_with = "dt_any")]
+  pub timestamp: DateTime<Utc>,
+  /// The exchange code where the trade occurred.
+  #[serde(rename = "x")]
+  pub exchange_code: String,
+  /// The trade condition.
+  #[serde(rename = "c")]
+  pub trade_condition: String
 }
 
 

@@ -6,6 +6,8 @@ mod unfold;
 
 /// Definitions for retrieval of market data bars.
 pub mod bars;
+/// Functionality for deserializing types.
+pub mod de;
 /// Functionality for retrieval of most recent quotes.
 pub mod last_quotes;
 /// Functionality for retrieval of options market data.
