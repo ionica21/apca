@@ -81,17 +81,21 @@ where
     4 => {
       let secs = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as i64;
       Utc
-        .timestamp_opt(secs, 0)
+        .timestamp_opt(secs, 0_u32)
         .single()
         .ok_or_else(|| E::custom("invalid 32-bit ext ts"))
     },
-    // 64-bit: 30-bit nanos (high) + 34-bit seconds (low, unsigned)
+    // 64-bit: low 34 bits seconds, high 30 bits nanoseconds
     8 => {
       let u = u64::from_be_bytes([
         data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
       ]);
-      let nanos = (u >> 34) as u32; // top 30 bits
-      let secs = (u & 0x3FFF_FFFF) as i64; // low 34 bits
+
+      // seconds = data64 & 0x00000003FFFFFFFF
+      let secs = (u & 0x0000_0003_FFFF_FFFF) as i64;
+      // nanoseconds = data64 >> 34
+      let nanos = (u >> 34) as u32;
+
       Utc
         .timestamp_opt(secs, nanos)
         .single()
